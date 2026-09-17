@@ -1,6 +1,6 @@
 # ER図
 
-DBで管理する対象を、QA・ユーザー・権限グループ・権限レベル・チャットログの5つに絞った構成案。
+DBで管理する対象を、QA・ユーザー・権限グループ・権限レベル・チャットログの5つに絞る。QA本文と検索用Embeddingは同じQAテーブルで管理する。
 
 この案では、ユーザーは1つの権限グループに所属し、グループに設定された権限レベルを利用する。QAには閲覧に必要な権限レベルを設定する。グループの所属数とレベルの比較方式は設計上の仮定とする。
 
@@ -30,6 +30,13 @@ erDiagram
         uuid id PK "QA ID"
         string question "質問"
         string answer "回答"
+        string category "カテゴリ（任意）"
+        string[] tags "タグ（空配列可）"
+        int content_revision "検索対象内容の版番号"
+        vector embedding "検索用ベクトル（未生成時はNULL）"
+        string embedding_profile "モデル・次元数・入力形式を識別する設定版"
+        int embedding_revision "ベクトル生成元の版番号"
+        string embedding_status "生成状態（pending・ready・failed）"
         uuid required_permission_level_id FK "閲覧に必要な権限レベルID"
         string status "状態（active・excluded・deleted）"
         uuid updated_by FK "最終更新者ID"
@@ -43,7 +50,7 @@ erDiagram
         int sequence_number "会話内の連番"
         string role "発言者種別（user・assistant）"
         string content "メッセージ本文"
-        json citations "回答の出典情報（出典QAのID・元データ・回答内の対応箇所）"
+        json citations "生成に使用したQAのID・版番号・元データ・出典マーカー"
         datetime created_at "作成日時"
     }
 
@@ -80,11 +87,17 @@ erDiagram
 ### QAとチャットログの保存
 
 - PDF入力 → AIがQA形式に抽出 → 画面上に追加項目として表示 → 利用者が編集・選択 → 登録、の流れとする。登録前の項目は画面の一時データとして扱い、DBには保存しない。
-- 登録操作で確定したQAだけをQAテーブルにactiveで保存する。手動入力とPDFからの抽出で保存形式を分けず、検索対象はactiveのみとする。
+- 登録操作で確定したQAだけをQAテーブルに`active`で保存し、Embeddingを生成する。手動入力とPDFからの抽出で保存形式を分けない。チャットの検索対象は`active`かつ現在の内容・設定に対応するEmbeddingが生成済みのQAとする。生成中・失敗時も本文は保持し、管理画面で状態の確認と再試行ができる。
 - DBはPDFを管理しない。PDF本体・ファイル名・ページ情報・抽出元との関連は保存しない。PDFの解析状態やエラーは入力画面で扱う。
 - QAには更新者と更新日時を記録する。更新・除外後の検索は現在の内容と状態を反映する。
+- `question`・`answer`・`category`・`tags`は1件のQAが持つカラムとし、カテゴリ・タグのマスタや中間テーブルは初期構成に設けない。`category`は任意、`tags`はPostgreSQLの`text[]`（既定値は空配列）とする。
+- 共有された会話の`source`は一般的なカラム例であり、本アプリには追加しない。出典は登録済みQAそのものであり、PDF由来の情報を保存しない既存要件を維持する。
+- `embedding`はpgvectorの`vector(D)`型とする。`D`は実装前に選定する次元数。`embedding_profile`はモデルID・次元数・文書／質問の入力形式・正規化方式をまとめた不変の設定識別子とする。設定の実体はサーバーの構成で管理する。
+- `content_revision`は1から始め、質問・回答・カテゴリ・タグの変更時に増やす。同じトランザクションでEmbeddingを無効化する。`ready`ではEmbedding・設定識別子・生成元版番号が必須で、`embedding_revision = content_revision`を満たす。生成状態・QA状態はそれぞれ列挙した値に制約する。
+- 公開範囲・除外・削除はEmbeddingと独立して即時に反映する。生成結果は対象の版番号が変わっていない場合だけ保存する。詳しい検索条件・再試行手順は[RAG設計](rag-design.md)を参照。
 - チャットログは1メッセージ1行とし、`conversation_id`で会話をまとめる。会話内の`sequence_number`は一意にする。
-- 回答の出典はassistant行の`citations`に保持する。QAのID、回答時の質問・回答、回答内の出典マーカーを格納し、別テーブルは設けない。JSON内のQA参照の整合性はアプリ側で管理する。
+- 回答の出典はassistant行の`citations`に保持する。QAのID・`content_revision`、回答時の質問・回答、回答内の出典マーカーを格納し、別テーブルは設けない。JSON内のQA参照の整合性はアプリ側で管理する。
+- 履歴の権限・版確認のため、`citations`には生成へ渡した全QAをサーバー側で記録する。回答内で引用されなかったQAの出典マーカーは空配列とし、出典画面にはマーカーのあるQAだけを表示する。
 - 過去のログや出典を表示・会話文脈に再利用するときも現在のQAの権限と状態を確認する。権限変更・削除・更新により利用できなくなった情報を再開示しない扱いとする。
 
 [ユーザーストーリー](user-stories.md)・[ユースケース図](use-cases.md)・[README](../README.md)
