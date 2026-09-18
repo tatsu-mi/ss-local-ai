@@ -111,6 +111,6 @@ Supabaseではpgvectorの`vector(D)`列にEmbeddingを保存できる。次元�
 
 実装時は、言い換えた日本語の質問から期待するQAを取得できるか、権限外QAが検索結果・API送信内容・回答・出典・履歴に含まれないかを確認する。加えて、生成失敗後の再試行、更新処理の競合、削除・除外、モデル設定の不一致、根拠不足・矛盾・追質問を検証する。検索の候補取得率と回答の根拠への忠実さは分けて評価する。
 
-モデル・次元数・関連性閾値・認証とDBの連携方式は実装前に確定する。権限付き検索の基盤については[SupabaseのRAGと権限制御](https://supabase.com/docs/guides/ai/rag-with-permissions)を参照する。
+初期実装では`gemini-embedding-001`の768次元出力を採用し、文書は`RETRIEVAL_DOCUMENT`、質問は`RETRIEVAL_QUERY`として生成する。設定識別子は`gemini-embedding-001:768:retrieval-v1`、関連性閾値は日本語実データで評価する開始値として0.70、候補10件、回答入力は最大5件とする。回答・PDF抽出には`gemini-3.8-flash`を使用する。認証はAuth.jsのMicrosoft Entra IDシングルテナントJWTセッション、DBアクセスはサーバー専用のSupabaseサービスロールとし、ブラウザからのDB直接アクセスは許可しない。サービスロール経路のため、全APIと検索RPCでアプリユーザーの最新権限を明示的に検証する。権限付き検索の基盤については[SupabaseのRAGと権限制御](https://supabase.com/docs/guides/ai/rag-with-permissions)を参照する。
 
 [README](../README.md)・[ER図](er-diagram.md)・[ユーザーストーリー](user-stories.md)
