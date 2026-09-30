@@ -69,14 +69,11 @@ export async function embedText(text: string, kind: "document" | "query") {
 
 async function generateContentWithRetry<T>(
   request: Parameters<ReturnType<typeof client>["models"]["generateContent"]>[0],
+  fallbackModel: string,
   parse: (responseText: string) => T,
 ) {
   const config = env();
   const primaryModel = request.model;
-  const fallbackModel =
-    config.GEMINI_GENERATION_FALLBACK_MODEL === primaryModel
-      ? primaryModel
-      : config.GEMINI_GENERATION_FALLBACK_MODEL;
   const modelForAttempt = (attempt: number) =>
     attempt === 1 ? primaryModel : fallbackModel;
 
@@ -114,6 +111,7 @@ export async function generateGroundedAnswer(input: {
   history: Array<{ role: "user" | "assistant"; content: string }>;
   sources: RagQa[];
 }): Promise<GroundedAnswer> {
+  const config = env();
   const allowedIds = input.sources.map((source) => source.id);
   const sourceText = input.sources
     .map(
@@ -126,7 +124,7 @@ export async function generateGroundedAnswer(input: {
     .join("\n");
 
   return generateContentWithRetry({
-    model: env().GEMINI_GENERATION_MODEL,
+    model: config.GEMINI_GENERATION_MODEL,
     contents: `会話文脈（検索対象の特定にだけ使い、事実根拠にしない）:\n${historyText || "なし"}\n\n現在の依頼:\n${input.question}\n\n利用可能な登録済みQA:\n${sourceText}`,
     config: {
       systemInstruction: [
@@ -137,7 +135,6 @@ export async function generateGroundedAnswer(input: {
         "登録済みQAに回答の根拠がない場合はstatusをinsufficientにし、推測で回答せず、citationsを空配列にしてください。",
         "リスト・表・要約では『取得できた情報の範囲』であることを明示し、網羅性を断定しないでください。",
       ].join("\n"),
-      temperature: 0.1,
       responseMimeType: "application/json",
       responseJsonSchema: {
         type: "object",
@@ -164,7 +161,8 @@ export async function generateGroundedAnswer(input: {
         additionalProperties: false,
       },
     },
-  }, (responseText) => parseGroundedAnswerResponse(responseText, allowedIds));
+  }, config.GEMINI_GENERATION_FALLBACK_MODEL, (responseText) =>
+    parseGroundedAnswerResponse(responseText, allowedIds, config.RAG_CITATION_VALIDATION_MODE));
 }
 
 const extractedQaSchema = z.object({
@@ -179,9 +177,10 @@ const extractedQaSchema = z.object({
 });
 
 export async function extractQaFromPdf(bytes: Uint8Array) {
+  const config = env();
   const base64 = Buffer.from(bytes).toString("base64");
   return generateContentWithRetry({
-    model: env().GEMINI_GENERATION_MODEL,
+    model: config.GEMINI_PDF_MODEL,
     contents: [
       {
         text: "このPDFに明記された内容だけをQA形式で抽出してください。記載のない情報は補わず、質問と回答だけで意味が通る単位にしてください。QAを抽出できない場合はitemsを空配列にしてください。",
@@ -189,7 +188,6 @@ export async function extractQaFromPdf(bytes: Uint8Array) {
       { inlineData: { mimeType: "application/pdf", data: base64 } },
     ],
     config: {
-      temperature: 0,
       responseMimeType: "application/json",
       responseJsonSchema: {
         type: "object",
@@ -213,7 +211,8 @@ export async function extractQaFromPdf(bytes: Uint8Array) {
         additionalProperties: false,
       },
     },
-  }, (responseText) => extractedQaSchema.parse(JSON.parse(responseText)));
+  }, config.GEMINI_PDF_FALLBACK_MODEL, (responseText) =>
+    extractedQaSchema.parse(JSON.parse(responseText)));
 }
 
 function isRetryableOrInvalidResponse(error: unknown) {

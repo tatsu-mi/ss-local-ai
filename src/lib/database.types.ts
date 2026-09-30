@@ -186,6 +186,20 @@ export type Database = {
         };
         Returns: ChatLogRow;
       };
+      list_chat_conversations: {
+        Args: { p_user_id: string; p_limit?: number };
+        Returns: Array<{
+          conversation_id: string;
+          title: string;
+          message_count: number;
+          created_at: string;
+          updated_at: string;
+        }>;
+      };
+      delete_chat_conversation: {
+        Args: { p_user_id: string; p_conversation_id: string };
+        Returns: boolean;
+      };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

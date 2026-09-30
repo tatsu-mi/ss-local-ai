@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { env } from "./env";
 import type { Json } from "./database.types";
 import { generateGroundedAnswer, isRetryableGeminiError } from "./gemini";
+import { normalizeCitationMarkers } from "./citation-markers";
 import { INSUFFICIENT_ANSWER } from "./grounded-answer";
 import { AppError } from "./http";
 import { searchQa, sourcesAreStillAccessible } from "./qa-service";
@@ -17,6 +18,14 @@ interface ChatRow {
   content: string;
   citations: StoredCitations | null;
   created_at: string;
+}
+
+export interface ConversationSummary {
+  conversationId: string;
+  title: string;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export async function answerQuestion(
@@ -97,17 +106,18 @@ export async function answerQuestion(
     answer: source.answer,
     markers: markersById.get(source.id) ?? [],
   }));
+  const normalized = normalizeCitationMarkers(generated.answer, dependencies);
   const message = await appendMessage(
     user.id,
     conversationId,
     "assistant",
-    generated.answer,
-    { dependencies },
+    normalized.content,
+    { dependencies: normalized.citations },
   );
   return {
     conversationId,
     message,
-    citations: dependencies.filter((citation) => citation.markers.length > 0),
+    citations: normalized.citations.filter((citation) => citation.markers.length > 0),
     outcome: "answered" as const,
   };
 }
@@ -121,17 +131,48 @@ export async function listConversation(user: CurrentUser, conversationId: string
     }
     output.push(row);
   }
-  return output.map((row) => ({
-    ...row,
-    citations:
-      row.citations?.dependencies.filter((citation) => citation.markers.length > 0) ?? [],
-    outcome:
-      row.role === "assistant" && row.citations?.dependencies.length === 0
-        ? "insufficient" as const
-        : row.role === "assistant"
-          ? "answered" as const
-          : undefined,
+  return output.map((row) => {
+    const normalized = row.citations
+      ? normalizeCitationMarkers(row.content, row.citations.dependencies)
+      : null;
+    return {
+      ...row,
+      content: normalized?.content ?? row.content,
+      citations: normalized?.citations.filter((citation) => citation.markers.length > 0) ?? [],
+      outcome:
+        row.role === "assistant" && row.citations?.dependencies.length === 0
+          ? "insufficient" as const
+          : row.role === "assistant"
+            ? "answered" as const
+            : undefined,
+    };
+  });
+}
+
+export async function listConversations(user: CurrentUser): Promise<ConversationSummary[]> {
+  const { data, error } = await db().rpc("list_chat_conversations", {
+    p_user_id: user.id,
+    p_limit: 50,
+  });
+  throwIfDbError(error);
+  return (data ?? []).map((row) => ({
+    conversationId: row.conversation_id,
+    title: row.title,
+    messageCount: row.message_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   }));
+}
+
+export async function deleteConversation(user: CurrentUser, conversationId: string) {
+  const { data: deleted, error } = await db().rpc("delete_chat_conversation", {
+    p_user_id: user.id,
+    p_conversation_id: conversationId,
+  });
+  throwIfDbError(error);
+  if (!deleted) {
+    throw new AppError(404, "会話が見つかりません。", "NOT_FOUND");
+  }
 }
 
 async function safeConversationHistory(user: CurrentUser, conversationId: string) {

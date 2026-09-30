@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { answerQuestion, listConversation } from "@/lib/chat-service";
+import {
+  answerQuestion,
+  deleteConversation,
+  listConversation,
+  listConversations,
+} from "@/lib/chat-service";
 import { errorResponse } from "@/lib/http";
 import { currentUser } from "@/lib/session";
 import { requireBusinessAccess } from "@/lib/users";
@@ -10,9 +15,26 @@ export async function GET(request: NextRequest) {
   try {
     const user = await currentUser();
     requireBusinessAccess(user);
-    const conversationId = z.uuid().parse(request.nextUrl.searchParams.get("conversationId"));
+    const requestedId = request.nextUrl.searchParams.get("conversationId");
+    if (!requestedId) {
+      const conversations = await listConversations(user);
+      return NextResponse.json({ conversations });
+    }
+    const conversationId = z.uuid().parse(requestedId);
     const messages = await listConversation(user, conversationId);
     return NextResponse.json({ messages });
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const user = await currentUser();
+    requireBusinessAccess(user);
+    const conversationId = z.uuid().parse(request.nextUrl.searchParams.get("conversationId"));
+    await deleteConversation(user, conversationId);
+    return new NextResponse(null, { status: 204 });
   } catch (error) {
     return errorResponse(error);
   }
