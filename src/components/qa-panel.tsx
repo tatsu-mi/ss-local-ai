@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { DragEvent, FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
 import { PERMISSION_LEVEL_IDS } from "@/lib/constants";
 import type { QaRecord } from "@/lib/types";
 import { api, jsonRequest } from "./api";
@@ -15,6 +15,14 @@ export function QaPanel({ canManage }: { canManage: boolean }) {
   const [showCreate, setShowCreate] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [csvResult, setCsvResult] = useState<ImportResult | null>(null);
+  const csvInput = useRef<HTMLInputElement>(null);
+  const csvInputId = useId();
+  const csvDragDepth = useRef(0);
+  const [isDraggingCsv, setIsDraggingCsv] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [importMode, setImportMode] = useState<"append" | "replace">("append");
+  const [csvFile, setCsvFile] = useState<File | null>(null);
 
   const load = useCallback(async (query = "") => {
     try {
@@ -66,6 +74,107 @@ export function QaPanel({ canManage }: { canManage: boolean }) {
     }
   }
 
+  async function exportCsv() {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/qa/csv");
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.error ?? "CSVのエクスポートに失敗しました。");
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `qa-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "CSVのエクスポートに失敗しました。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function selectCsvFiles(files: FileList | null) {
+    if (busy || !files?.length) return;
+    const selectedFiles = Array.from(files);
+    if (csvInput.current) csvInput.current.value = "";
+    setCsvFile(null);
+    setCsvResult(null);
+    if (selectedFiles.length !== 1) {
+      setError("CSVファイルは1つずつ選択してください。");
+      return;
+    }
+    const file = selectedFiles[0];
+    if (!/\.csv$/i.test(file.name)) {
+      setError("CSVファイルを選択してください。");
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setError("CSVファイルは2MB以下にしてください。");
+      return;
+    }
+    setCsvFile(file);
+    setError("");
+  }
+
+  function resetCsvSelection() {
+    setCsvFile(null);
+    if (csvInput.current) csvInput.current.value = "";
+    csvDragDepth.current = 0;
+    setIsDraggingCsv(false);
+  }
+
+  function handleCsvDragEnter(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    if (busy || !Array.from(event.dataTransfer.types).includes("Files")) return;
+    csvDragDepth.current += 1;
+    setIsDraggingCsv(true);
+  }
+
+  function handleCsvDragLeave(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    csvDragDepth.current = Math.max(0, csvDragDepth.current - 1);
+    if (csvDragDepth.current === 0) setIsDraggingCsv(false);
+  }
+
+  function handleCsvDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    csvDragDepth.current = 0;
+    setIsDraggingCsv(false);
+    selectCsvFiles(event.dataTransfer.files);
+  }
+
+  async function importCsv(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const file = csvFile;
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      setError("CSVファイルは2MB以下にしてください。");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setCsvResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("mode", importMode);
+      const result = await api<ImportResult>("/api/qa/csv", { method: "POST", body: form });
+      setCsvResult(result);
+      resetCsvSelection();
+      setShowImport(false);
+      await load(search);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "CSVのインポートに失敗しました。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="panel">
       <div className="panel-heading">
@@ -74,8 +183,46 @@ export function QaPanel({ canManage }: { canManage: boolean }) {
           <h1>QA一覧</h1>
           <p>{canManage ? "本文・公開範囲・検索準備状態を管理します。" : "閲覧可能な登録情報を確認できます。"}</p>
         </div>
-        {canManage && <button className="primary" onClick={() => setShowCreate((value) => !value)}>QAを追加</button>}
+        {canManage && <div className="qa-actions">
+          <button className="secondary" type="button" disabled={busy} onClick={() => { resetCsvSelection(); setShowImport((value) => !value); }}>CSVインポート</button>
+          <button className="secondary" type="button" disabled={busy} onClick={() => void exportCsv()}>CSVエクスポート</button>
+          <button className="primary" type="button" disabled={busy} onClick={() => setShowCreate((value) => !value)}>QAを追加</button>
+        </div>}
       </div>
+      {canManage && showImport && <form className="editor-card" onSubmit={importCsv}>
+        <h2>CSVインポート</h2>
+        <label>インポート方法<select value={importMode} disabled={busy} onChange={(event) => setImportMode(event.target.value as "append" | "replace")}>
+          <option value="append">追加（既存のQAを残す）</option>
+          <option value="replace">全置き換え（既存のQAをすべて置き換える）</option>
+        </select></label>
+        <div
+          className={`csv-drop-zone${isDraggingCsv && !busy ? " is-dragging" : ""}${busy ? " is-disabled" : ""}`}
+          onDragEnter={handleCsvDragEnter}
+          onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = busy ? "none" : "copy"; }}
+          onDragLeave={handleCsvDragLeave}
+          onDrop={handleCsvDrop}
+        >
+          <input
+            ref={csvInput}
+            id={csvInputId}
+            className="visually-hidden"
+            type="file"
+            accept=".csv,text/csv"
+            disabled={busy}
+            onChange={(event) => selectCsvFiles(event.target.files)}
+          />
+          <label htmlFor={csvInputId}>
+            <span className="csv-drop-icon" aria-hidden="true">CSV</span>
+            <strong aria-live="polite">{csvFile ? csvFile.name : "CSVをドラッグ＆ドロップ"}</strong>
+            <span>{csvFile ? "別のCSVに変更するには、ここをクリックするかドロップしてください" : "またはクリックしてファイルを選択（2MBまで）"}</span>
+          </label>
+        </div>
+        {importMode === "replace" && <p className="fine-print">登録済みのQAはすべて削除扱いとなり、CSVの内容が新しいQAとして登録されます。</p>}
+        <div className="button-row">
+          <button className="primary" disabled={busy || !csvFile}>{busy ? "インポート中…" : importMode === "replace" ? "全置き換えしてインポート" : "追加してインポート"}</button>
+          <button className="secondary" type="button" disabled={busy} onClick={() => { resetCsvSelection(); setShowImport(false); }}>キャンセル</button>
+        </div>
+      </form>}
       <form className="search-row" onSubmit={(event) => { event.preventDefault(); void load(search); }}>
         <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="質問・回答をキーワード検索" />
         <button className="secondary" type="submit">検索</button>
@@ -93,7 +240,12 @@ export function QaPanel({ canManage }: { canManage: boolean }) {
           <div className="button-row"><button className="primary" disabled={busy}>保存して検索準備</button><button className="secondary" type="button" onClick={() => setShowCreate(false)}>キャンセル</button></div>
         </form>
       )}
+      {canManage && <p className="fine-print">CSVはUTF-8形式。質問・回答・公開範囲の列が必須です。公開範囲はDBの権限名、タグは「、」またはカンマ区切りで指定します。一度に100件・2MBまでインポートできます。</p>}
       {error && <p className="error-banner" role="alert">{error}</p>}
+      {csvResult && <div className={csvResult.errors.length ? "error-banner" : "csv-result"} role="status">
+        <p>CSVインポート: {csvResult.mode === "replace" ? "全置き換え" : "追加"}で{csvResult.created}件を登録しました。検索準備の失敗 {csvResult.errors.length}件</p>
+        {csvResult.errors.length > 0 && <ul>{csvResult.errors.map((item) => <li key={item.line}>{item.line}行目: {item.message}</li>)}</ul>}
+      </div>}
       <div className="qa-list">
         {items.map((item) => (
           <QaCard key={item.id} item={item} canManage={canManage} busy={busy} patch={patch} reload={() => load(search)} setError={setError} />
@@ -151,3 +303,9 @@ function QaCard({ item, canManage, busy, patch, reload, setError }: {
 
 function splitTags(value: string) { return value.split(/[,、]/).map((tag) => tag.trim()).filter(Boolean); }
 function embeddingLabel(status: QaRecord["embedding_status"]) { return status === "ready" ? "検索準備済み" : status === "pending" ? "検索準備中" : "検索準備失敗"; }
+
+interface ImportResult {
+  created: number;
+  mode: "append" | "replace";
+  errors: { line: number; message: string }[];
+}

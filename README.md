@@ -32,6 +32,7 @@ Next.js App Routerの単一アプリとして初期リリース範囲を実装�
 - 会話履歴の一覧・再表示・本人による削除と、現在利用できないQAに依存する過去回答の非表示・会話文脈からの除外
 - PDFからのQA抽出、ブラウザ上での編集・選択、項目単位の冪等な登録
 - 利用者の権限グループ管理
+- QAのCSVインポート・エクスポート（QA管理権限が必要）
 
 ### ローカル起動
 
@@ -42,6 +43,18 @@ Next.js App Routerの単一アプリとして初期リリース範囲を実装�
 3. Supabase CLIの`supabase db push`を実行するか、SQL Editorで[`supabase/migrations/202609170001_initial_schema.sql`](supabase/migrations/202609170001_initial_schema.sql)を適用する。
 4. Entra IDのWebリダイレクトURIへ`http://localhost:3100/api/auth/callback/microsoft-entra-id`を登録する。
 5. `npm run dev`で起動する。
+
+### QAのCSVインポート・エクスポート
+
+QA画面の「CSVエクスポート」で、閲覧可能な削除済み以外のQAをUTF-8（BOM付き）CSVとして保存できる。一覧画面の200件制限は適用されない。エクスポートの上限は10,000件。
+
+「CSVインポート」で「追加」または「全置き換え」を選択する。追加は既存QAを残し、CSVの全行を新規登録する。全置き換えは既存の削除済み以外のQAをすべて削除扱いにして、CSVの全行を新しいQAとして登録する。どちらもインポートしたQAは版1・`active`になり、IDはDBで新規発行される。同じCSVを追加で再インポートすると、その件数分だけ追加される。
+
+CSVの列は`質問,回答,カテゴリ,タグ,公開範囲`。質問・回答・公開範囲は必須。質問・回答・カテゴリ・タグは英語の`question`・`answer`・`category`・`tags`も入力できる。公開範囲は`permission_level.name`の名前（初期値では「バックオフィス」「エンジニア」）を指定し、DBに存在しない名前・空欄・利用者が指定できない権限はエラーにする。タグは`申請、総務`のような「、」区切りで出力し、入力は「、」またはカンマ区切りに対応する。JSON配列の括弧や引用符は不要。セル内にカンマ・改行・引用符がある場合は、通常のCSVとしてそのセルを引用符で囲む。
+
+インポートはUTF-8形式、100件・2MBまで。全行の内容と公開範囲を検証した後、既存QAの削除扱いと新規QAの登録を同じDBトランザクションで行う。不正な入力や保存エラーがあれば、既存QAを変更しない。保存後に検索準備が失敗したQAは画面で件数を表示し、一覧から再試行できる。
+
+CSVインポートには[`supabase/migrations/202610010001_qa_csv_import.sql`](supabase/migrations/202610010001_qa_csv_import.sql)の適用が必要。`supabase db push`またはSQL Editorで適用する。
 
 ### Gemini の設定
 

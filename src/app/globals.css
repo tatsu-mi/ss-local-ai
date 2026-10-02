@@ -42,6 +42,18 @@ h2 { line-height: 1.45; }
 .panel-heading, .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .panel-heading { margin-bottom: 28px; }
 .panel-heading p:not(.eyebrow) { color: var(--muted); }
+.qa-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.csv-result { padding: 11px 14px; margin-bottom: 16px; color: #12624f; background: #ddefe9; border: 1px solid #b9dacc; border-radius: 8px; }
+.csv-result p, .error-banner p { margin-bottom: 0; }
+.error-banner ul { margin-bottom: 0; }
+.csv-drop-zone { margin-top: 13px; border: 2px dashed #b8c8c2; border-radius: 11px; background: #f8faf8; transition: border-color .15s ease, background .15s ease; }
+.csv-drop-zone:hover, .csv-drop-zone:focus-within, .csv-drop-zone.is-dragging { border-color: var(--brand); background: var(--brand-soft); }
+.csv-drop-zone label { display: flex; flex-direction: column; min-height: 170px; padding: 28px 20px; align-items: center; justify-content: center; gap: 5px; cursor: pointer; color: var(--ink); text-align: center; }
+.csv-drop-zone strong { max-width: 100%; overflow-wrap: anywhere; }
+.csv-drop-zone label > span:last-child { color: var(--muted); font-size: .8rem; font-weight: 400; }
+.csv-drop-icon { display: grid; place-items: center; width: 52px; height: 52px; margin-bottom: 8px; border-radius: 12px; color: #fff; background: var(--brand); font-size: .72rem; font-weight: 800; letter-spacing: .06em; }
+.csv-drop-zone.is-disabled { opacity: .55; border-color: #b8c8c2; background: #f8faf8; }
+.csv-drop-zone.is-disabled label { cursor: not-allowed; }
 
 .primary, .secondary { min-height: 42px; padding: 9px 17px; border-radius: 9px; border: 1px solid transparent; font-weight: 700; }
 .primary { color: #fff; background: var(--brand); }
@@ -147,6 +159,7 @@ tr:last-child td { border-bottom: 0; }
   .nav-item { width: auto; min-width: max-content; padding: 8px 12px; }
   .workspace { padding: 24px 14px 50px; }
   .panel-heading, .section-heading, .qa-footer { align-items: stretch; flex-direction: column; }
+  .qa-actions { justify-content: flex-start; }
   .form-grid { grid-template-columns: 1fr; }
   .message { max-width: 94%; }
   .chat-workspace { grid-template-columns: 1fr; gap: 16px; }

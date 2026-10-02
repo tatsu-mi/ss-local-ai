@@ -4,6 +4,7 @@ import { embedText } from "./gemini";
 import { AppError } from "./http";
 import { db, throwIfDbError } from "./supabase";
 import type { CurrentUser, QaRecord, RagQa } from "./types";
+import type { QaCsvImportMode, QaCsvRow } from "./qa-csv";
 import { embeddingDocument, normalizeTags, qaContentSchema } from "./validation";
 import type { z } from "zod";
 
@@ -42,6 +43,77 @@ export async function listQa(user: CurrentUser, search = "") {
   const { data, error } = await query;
   throwIfDbError(error);
   return data as unknown as QaRecord[];
+}
+
+export async function listQaForExport(user: CurrentUser) {
+  const items: QaRecord[] = [];
+  const pageSize = 500;
+  const maxRows = 10000;
+  for (let offset = 0; offset <= maxRows; offset += pageSize) {
+    let query = db()
+      .from("qa")
+      .select(`${publicQaColumns}, required_level:permission_level!inner(rank)`)
+      .neq("status", "deleted")
+      .lte("required_level.rank", user.permissionRank)
+      .order("id", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (!user.canManageQa) query = query.eq("status", "active");
+    const { data, error } = await query;
+    throwIfDbError(error);
+    const page = data as unknown as QaRecord[];
+    items.push(...page);
+    if (items.length > maxRows) throw new AppError(413, `エクスポートできるQAは${maxRows}件までです。`, "EXPORT_LIMIT");
+    if (page.length < pageSize) break;
+  }
+  return items;
+}
+
+export async function listQaPermissionLevels() {
+  const { data, error } = await db().from("permission_level").select("id, name, rank").order("rank");
+  throwIfDbError(error);
+  return data ?? [];
+}
+
+export async function importQaCsv(user: CurrentUser, rows: QaCsvRow[], mode: QaCsvImportMode) {
+  // Validate every row before the transaction can replace existing QA.
+  for (const row of rows) {
+    try {
+      assertEmbeddable(row);
+    } catch (error) {
+      if (error instanceof AppError) throw new AppError(error.status, `${row.line}行目: ${error.message}`, error.code);
+      throw error;
+    }
+  }
+  const { data, error } = await db().rpc("import_qa_csv", {
+    p_rows: rows.map((row) => ({
+      question: row.question,
+      answer: row.answer,
+      category: row.category,
+      tags: row.tags,
+      required_permission_level_id: row.requiredPermissionLevelId,
+    })),
+    p_replace: mode === "replace",
+    p_updated_by: user.id,
+    p_user_rank: user.permissionRank,
+  });
+  if (error?.message.includes("QA_REPLACE_FORBIDDEN")) {
+    throw new AppError(403, "閲覧できないQAがあるため、全置き換えできません。", "QA_REPLACE_FORBIDDEN");
+  }
+  if (error?.message.includes("QA_IMPORT_INVALID_PERMISSION")) {
+    throw new AppError(400, "公開範囲の権限が変更されました。CSVを確認してください。", "QA_IMPORT_INVALID_PERMISSION");
+  }
+  throwIfDbError(error);
+  const items = data as unknown as QaRecord[];
+  const errors: { line: number; message: string }[] = [];
+  for (let index = 0; index < items.length; index++) {
+    try {
+      if (await prepareEmbedding(items[index])) continue;
+    } catch (error) {
+      console.error("CSV QA embedding failed", { qaId: items[index].id, error });
+    }
+    errors.push({ line: rows[index].line, message: "QAは保存済みですが、検索準備に失敗しました。一覧から再試行してください。" });
+  }
+  return { mode, created: items.length, errors };
 }
 
 export async function createQa(

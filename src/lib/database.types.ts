@@ -133,6 +133,10 @@ export type Database = {
     };
     Views: Record<string, never>;
     Functions: {
+      import_qa_csv: {
+        Args: { p_rows: Json; p_replace: boolean; p_updated_by: string; p_user_rank: number };
+        Returns: QaRow[];
+      };
       update_qa_content: {
         Args: {
           p_qa_id: string;
