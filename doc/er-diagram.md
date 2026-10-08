@@ -1,6 +1,6 @@
 # ER図
 
-DBで管理する対象を、QA・ユーザー・管理者アカウント・権限グループ・権限レベル・チャットログの6つに絞る。QA本文と検索用Embeddingは同じQAテーブルで管理する。
+現行実装でDB管理する対象は、QA・ユーザー・管理者アカウント・権限グループ・権限レベル・チャットログの6つ。QA本文と検索用Embeddingは同じQAテーブルで管理する。エンジニア情報の追加設計は後段に示す。
 
 この案では、ユーザーは1つの権限グループに所属し、グループに設定された権限レベルを利用する。QAには閲覧に必要な権限レベルを設定する。グループの所属数とレベルの比較方式は設計上の仮定とする。
 
@@ -106,4 +106,83 @@ erDiagram
 - 履歴の権限・版確認のため、`citations`には生成へ渡した全QAをサーバー側で記録する。回答内で引用されなかったQAの出典マーカーは空配列とし、出典画面にはマーカーのあるQAだけを表示する。
 - 過去のログや出典を表示・会話文脈に再利用するときも現在のQAの権限と状態を確認する。権限変更・削除・更新により利用できなくなった情報を再開示しない扱いとする。
 
-[ユーザーストーリー](user-stories.md)・[ユースケース図](use-cases.md)・[README](../README.md)
+## 追加設計：エンジニア情報
+
+エンジニアの検索対象データはログイン用`APP_USER`や業務`QA`と分ける。1人に複数のスキル・業務経験を持たせ、経歴の文章を案件単位でEmbedding化する。以下は論理モデルであり、マイグレーションは未実装。
+
+チャットの検索先は追加する`CHAT_CONVERSATION`に`qa`または`engineer`として保存し、会話作成後は変更しない。`CHAT_LOG.conversation_id`をこのテーブルの外部キーにし、既存の会話は`qa`で移行する。検索先を切り替える場合は別の会話を作る。
+
+```mermaid
+erDiagram
+    APP_USER o|--o| ENGINEER_PROFILE : "本人対応（任意）"
+    PERMISSION_LEVEL ||--o{ ENGINEER_PROFILE : "閲覧に必要なレベル"
+    ENGINEER_PROFILE ||--o{ ENGINEER_SKILL : "保有スキル"
+    ENGINEER_PROFILE ||--o{ ENGINEER_EXPERIENCE : "業務経験"
+    APP_USER ||--o{ ENGINEER_PROFILE : "最終更新"
+    APP_USER ||--o{ CHAT_CONVERSATION : "会話の所有"
+    CHAT_CONVERSATION ||--o{ CHAT_LOG : "同じ検索先の発言"
+
+    CHAT_CONVERSATION {
+        uuid id PK "会話ID"
+        uuid user_id FK "所有者ID"
+        string knowledge_source "検索先（qa・engineer）"
+        datetime created_at "作成日時"
+    }
+
+    ENGINEER_PROFILE {
+        uuid id PK "エンジニアID"
+        uuid app_user_id FK "ログイン利用者との対応（任意）"
+        string display_name "表示名"
+        string department "所属"
+        string availability "稼働状況（不明可）"
+        string summary "概要（任意）"
+        uuid required_permission_level_id FK "閲覧に必要なレベル"
+        string status "active・excluded・deleted"
+        int content_revision "基本情報の版番号"
+        uuid created_by FK "登録者"
+        uuid updated_by FK "最終更新者"
+        datetime created_at "作成日時"
+        datetime updated_at "更新日時"
+    }
+    ENGINEER_SKILL {
+        uuid id PK "スキルID"
+        uuid engineer_id FK "エンジニアID"
+        string canonical_name "正規化スキル名"
+        string original_name "登録時の表記"
+        int experience_months "経験月数（不明はNULL）"
+        string evidence_note "年数の根拠（任意）"
+        int content_revision "版番号"
+        uuid created_by FK "登録者"
+        uuid updated_by FK "最終更新者"
+        datetime created_at "作成日時"
+        datetime updated_at "更新日時"
+    }
+    ENGINEER_EXPERIENCE {
+        uuid id PK "業務経験ID"
+        uuid engineer_id FK "エンジニアID"
+        string project_name "案件名または識別子"
+        string industry "業界（任意）"
+        date start_date "開始日（任意）"
+        date end_date "終了日（任意）"
+        string role "役割"
+        string responsibilities "担当内容"
+        string outcomes "成果（任意）"
+        string source_reference "元資料の参照（任意）"
+        int content_revision "本文の版番号"
+        vector embedding "検索用ベクトル"
+        string embedding_profile "モデル・入力形式の設定版"
+        int embedding_revision "ベクトル生成元の版番号"
+        string embedding_status "pending・ready・failed"
+        string status "active・excluded・deleted"
+        uuid created_by FK "登録者"
+        uuid updated_by FK "最終更新者"
+        datetime created_at "作成日時"
+        datetime updated_at "更新日時"
+    }
+```
+
+`PERMISSION_GROUP`にはエンジニア情報の管理操作権限`can_manage_engineer_profiles`を追加する。初期案ではバックオフィス権限だけが閲覧できる設定とする。経歴に個別の非公開条件が必要になれば`ENGINEER_EXPERIENCE`にも要求レベルを追加する。検索先はクライアント指定だけで決めず、`CHAT_CONVERSATION.knowledge_source`と現在の権限をサーバーで確認する。出典を含む履歴の保持・再表示は[RAG設計](rag-design.md#エンジニア情報を使う検索と回答)を参照。
+
+エンジニア情報の会話では、`CHAT_LOG.citations`に表示用のエンジニアIDと出典マーカー、内部検証用のプロフィール・スキル・業務経験のIDと版番号を保存する。画面にはエンジニア単位で出典をまとめ、詳細ページ`/engineers/{engineer_id}`へリンクする。詳細ページの表示内容は保存済み出典JSONをそのまま出さず、現在のDB状態と閲覧権限から取得する。
+
+[エンジニア情報のDB・RAG設計](engineer-profile-design.md)・[ユーザーストーリー](user-stories.md)・[ユースケース図](use-cases.md)・[README](../README.md)
